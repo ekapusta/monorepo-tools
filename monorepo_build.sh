@@ -10,12 +10,13 @@
 # Example: monorepo_build.sh main-repository package-alpha:packages/alpha package-beta:packages/beta
 
 # Check provided arguments
-if [ "$#" -lt "2" ]; then
-    echo 'Please provide at least 2 remotes to be merged into a new monorepo'
+if [ "$#" -lt "1" ]; then
+    echo 'Please provide at least 1 remote to be merged into a new monorepo'
     echo 'Usage: monorepo_build.sh <remote-name>[:<subdirectory>] <remote-name>[:<subdirectory>] ...'
-    echo 'Example: monorepo_build.sh main-repository package-alpha:packages/alpha package-beta:packages/beta'
+    echo 'Example: monorepo_build.sh package-alpha:packages/alpha package-beta:packages/beta'
     exit
 fi
+MERGE_INTO_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Get directory of the other scripts
 MONOREPO_SCRIPT_DIR=$(dirname "$0")
 # Wipe original refs (possible left-over back-up after rewriting git history)
@@ -29,31 +30,22 @@ for PARAM in $@; do
         SUBDIRECTORY=$REMOTE
     fi
     # Rewrite all branches from the first remote, only master branches from others
-    if [ "$PARAM" == "$1" ]; then
-        echo "Building all branches of the remote '$REMOTE'"
-        $MONOREPO_SCRIPT_DIR/load_branches_from_remote.sh $REMOTE
-        $MONOREPO_SCRIPT_DIR/rewrite_history_into.sh $SUBDIRECTORY --branches
-        MERGE_REFS='master'
-    else
-        echo "Building branch 'master' of the remote '$REMOTE'"
-        git checkout --detach $REMOTE/master
-        $MONOREPO_SCRIPT_DIR/rewrite_history_into.sh $SUBDIRECTORY
-        MERGE_REFS="$MERGE_REFS $(git rev-parse HEAD)"
-    fi
+    echo "Building branch 'master' of the remote '$REMOTE'"
+    git checkout --detach $REMOTE/master
+    $MONOREPO_SCRIPT_DIR/rewrite_history_into.sh $SUBDIRECTORY
+    MERGE_REFS="$MERGE_REFS $(git rev-parse HEAD)"
     # Wipe the back-up of original history
     $MONOREPO_SCRIPT_DIR/original_refs_wipe.sh
-done
-# Merge all master branches
-COMMIT_MSG="merge multiple repositories into a monorepo"$'\n'$'\n'"- merged using: 'monorepo_build.sh $@'"$'\n'"- see https://github.com/shopsys/monorepo-tools"
-git checkout master
-echo "Merging refs: $MERGE_REFS"
-git merge --no-commit -q $MERGE_REFS --allow-unrelated-histories
-echo 'Resolving conflicts using trees of all parents'
-for REF in $MERGE_REFS; do
-    # Add all files from all master branches into index
-    # "git read-tree" with multiple refs cannot be used as it is limited to 8 refs
-    git ls-tree -r $REF | git update-index --index-info
-done
-git commit -m "$COMMIT_MSG"
-git reset --hard
 
+    START_COMMIT=$(git log --pretty=format:"%h" | tail -1)
+    END_COMMIT=$(git rev-parse HEAD)
+
+    git rebase --preserve-merges --onto $MERGE_INTO_BRANCH $START_COMMIT $END_COMMIT
+    git checkout -b repo/$REMOTE
+    
+    MERGE_REFS=$(git rev-parse HEAD)
+
+    git checkout $MERGE_INTO_BRANCH
+    git merge --no-ff repo/$REMOTE
+    git branch --delete repo/$REMOTE
+done
